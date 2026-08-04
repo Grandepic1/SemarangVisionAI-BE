@@ -6,11 +6,13 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "alembic>=1.18.5",
+    "cryptography>=50.0.0",
     "fastapi>=0.141.1",
     "numpy>=2.2.6",
     "opencv-python>=5.0.0.93",
     "pillow>=12.3.0",
     "psycopg2-binary>=2.9.12",
+    "pymysql>=1.2.0",
     "python-dotenv>=1.2.2",
     "requests>=2.34.2",
     "sqlalchemy>=2.0.51",
