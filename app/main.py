@@ -1,9 +1,13 @@
+import os
+
+from dotenv import load_dotenv
 from fastapi import FastAPI
 
 from app.utils.response import ApiResponse, success
 
+load_dotenv()
 app = FastAPI(
-    title="Bandung Vision AI",
+    title=os.getenv("APP_NAME"),
     version="0.1.0"
 )
 
