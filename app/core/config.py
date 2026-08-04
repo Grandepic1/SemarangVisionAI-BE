@@ -7,6 +7,12 @@ load_dotenv()
 
 APP_NAME = os.getenv("APP_NAME", "Bandung Vision AI")
 
+# --- Scheduler settings ---
+# Set to "false" to disable the in-app daily scrape job (e.g. during dev/testing).
+SCHEDULER_ENABLED = os.getenv("SCHEDULER_ENABLED", "true").lower() == "true"
+# Daily scrape timezone. Asia/Jakarta = WIB (UTC+7).
+SCRAPE_TIMEZONE = os.getenv("SCRAPE_TIMEZONE", "Asia/Jakarta")
+
 # --- Database settings (component-based; no full URL in env) ---
 DB_TYPE = os.getenv("DB_TYPE", "postgresql").lower()  # "postgresql" or "mysql"
 DB_HOST = os.getenv("DB_HOST", "localhost")
