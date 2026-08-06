@@ -17,5 +17,6 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "requests>=2.34.2",
     "sqlalchemy>=2.0.51",
+    "ultralytics>=8.4.115",
     "uvicorn>=0.52.1",
 ]

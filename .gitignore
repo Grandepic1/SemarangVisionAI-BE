@@ -9,3 +9,9 @@ wheels/
 # Virtual environments
 .venv
 .env
+
+# YOLO training artifacts (ultralytics) + local datasets
+runs/
+datasets/
+# Downloaded ultralytics base weights (yolo11n.pt etc.)
+*.pt

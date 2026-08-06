@@ -1,0 +1,274 @@
+"""Train a YOLO11 model (nano/small) on a custom CCTV detection dataset.
+
+Designed to run on CPU out of the box (torch CPU build), no GPU required.
+YOLO11 variants: ``yolo11n`` (nano, fastest/lightest) and ``yolo11s`` (small,
+slightly more accurate). Pick based on your hardware — on CPU, nano is the
+recommended starting point.
+
+Usage examples
+--------------
+Train using an existing ``data.yaml``::
+
+    uv run python -m scripts.train_yolo --data datasets/cctv/data.yaml
+
+Train pointing straight at a dataset folder (a ``data.yaml`` is looked up
+inside it, or generated automatically from a ``train/`` + ``val/`` split)::
+
+    uv run python -m scripts.train_yolo --data datasets/cctv
+
+Switch to the small model and more epochs::
+
+    uv run python -m scripts.train_yolo --data datasets/cctv --model yolo11s.pt --epochs 200
+
+Resume an interrupted run::
+
+    uv run python -m scripts.train_yolo --data datasets/cctv --resume
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+# Ultralytics YOLO11. Importing this triggers a (one-time) download of the
+# base weights the first time you train.
+from ultralytics import YOLO
+
+DEFAULT_MODEL = "yolo11n.pt"  # nano — best accuracy/speed trade-off on CPU
+DEFAULT_EPOCHS = 100
+DEFAULT_IMGSZ = 640
+DEFAULT_PROJECT = "runs/detect"
+DEFAULT_NAME = "cctv_train"
+
+# Standard YOLO dataset layouts that are auto-detected when --data points at a
+# folder without a data.yaml.
+_SPLIT_LAYOUTS = {
+    "train": [("train/images", "train/labels"), ("images/train", "labels/train")],
+    "val": [("val/images", "val/labels"), ("images/val", "labels/val")],
+}
+
+
+class DatasetError(Exception):
+    """Raised when the dataset cannot be resolved for training."""
+
+
+def _find_data_yaml(data: Path) -> Path | None:
+    """Locate a data.yaml inside the given file/folder path."""
+    if data.is_file():
+        return data if data.name.lower() == "data.yaml" else None
+    candidate = data / "data.yaml"
+    return candidate if candidate.is_file() else None
+
+
+def _detect_split(data_root: Path, split: str) -> tuple[str, str] | None:
+    """Return the (images_rel, labels_rel) layout that actually exists for a split."""
+    for images_rel, labels_rel in _SPLIT_LAYOUTS[split]:
+        if (data_root / images_rel).is_dir():
+            return images_rel, labels_rel
+    return None
+
+
+def _count_classes(data_root: Path, *splits: str) -> int:
+    """Derive the number of classes from the label files of the given splits."""
+    max_class_id = -1
+    for split in splits:
+        for _, labels_rel in _SPLIT_LAYOUTS[split]:
+            labels_dir = data_root / labels_rel
+            if not labels_dir.is_dir():
+                continue
+            for label_file in labels_dir.glob("*.txt"):
+                for line_number, line in enumerate(
+                    label_file.read_text(encoding="utf-8").splitlines(), start=1
+                ):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        class_id = int(line.split()[0])
+                    except ValueError:
+                        raise DatasetError(
+                            f"Malformed label line in {label_file}:{line_number}: {line!r}"
+                        )
+                    max_class_id = max(max_class_id, class_id)
+    return max_class_id + 1
+
+
+def resolve_dataset(data_arg: str) -> Path:
+    """Turn --data into a usable YOLO data.yaml path, generating it if needed.
+
+    Accepts:
+      * a path to an existing data.yaml,
+      * a folder containing data.yaml,
+      * a folder with a train/ + val/ split (images + labels) — a data.yaml is
+        generated next to it.
+    """
+    data = Path(data_arg).resolve()
+    if not data.exists():
+        raise DatasetError(f"Dataset path does not exist: {data}")
+
+    yaml_path = _find_data_yaml(data)
+    if yaml_path is not None:
+        return yaml_path
+
+    # No data.yaml — try to auto-generate one from a standard train/val layout.
+    if not data.is_dir():
+        raise DatasetError(f"--data must point to a data.yaml file or a dataset folder: {data}")
+
+    train_layout = _detect_split(data, "train")
+    val_layout = _detect_split(data, "val")
+    if train_layout is None or val_layout is None:
+        missing = "train" if train_layout is None else "val"
+        raise DatasetError(
+            f"Dataset folder is missing a '{missing}' split (expected train/images + "
+            f"val/images, or images/train + images/val). Got: {sorted(p.name for p in data.iterdir())}"
+        )
+
+    nc = _count_classes(data, "train", "val")
+    train_images, _ = train_layout
+    val_images, _ = val_layout
+    yaml_path = data / "data.yaml"
+    names = "\n".join(f"    {i}: class_{i}" for i in range(nc))
+    # Absolute paths so training works regardless of the current working directory.
+    yaml_path.write_text(
+        f"# Auto-generated by scripts/train_yolo.py — edit names to match your classes.\n"
+        f"path: {data.as_posix()}\n"
+        f"train: {train_images}\n"
+        f"val: {val_images}\n"
+        f"nc: {nc}\n"
+        f"names:\n{names}\n",
+        encoding="utf-8",
+    )
+    print(f"[train_yolo] No data.yaml found — generated one at {yaml_path} "
+          f"(detected {nc} class(es) from your labels).")
+    return yaml_path
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="train_yolo",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--data",
+        required=True,
+        help="Dataset: path to data.yaml, or a dataset folder containing it "
+             "(a data.yaml is auto-generated from a train/ + val/ split if missing).",
+    )
+    parser.add_argument(
+        "--model",
+        default=DEFAULT_MODEL,
+        help=f"YOLO11 weights to start from. Default: {DEFAULT_MODEL}. "
+             f"Use 'yolo11s.pt' for the small variant, or a path to a custom .pt/.yaml.",
+    )
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        default=DEFAULT_EPOCHS,
+        help=f"Number of training epochs. Default: {DEFAULT_EPOCHS}.",
+    )
+    parser.add_argument(
+        "--imgsz",
+        type=int,
+        default=DEFAULT_IMGSZ,
+        help=f"Training image size (px). Default: {DEFAULT_IMGSZ}. "
+             f"Lower (e.g. 416/320) trains faster on CPU.",
+    )
+    parser.add_argument(
+        "--batch",
+        type=int,
+        default=-1,
+        help="Batch size; -1 lets ultralytics auto-detect the best value. "
+             "On CPU a small fixed batch (e.g. 8) is often more predictable.",
+    )
+    parser.add_argument(
+        "--device",
+        default="cpu",
+        help="Device: 'cpu' (default, always works), '0' for the first GPU, "
+             "'0,1' for multi-GPU, or 'auto'.",
+    )
+    parser.add_argument(
+        "--project",
+        default=DEFAULT_PROJECT,
+        help=f"Output directory root. Default: {DEFAULT_PROJECT}.",
+    )
+    parser.add_argument(
+        "--name",
+        default=DEFAULT_NAME,
+        help=f"Experiment name (output sub-folder). Default: {DEFAULT_NAME}.",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=8,
+        help="Dataloader worker processes. Lower on weak CPUs. Default: 8.",
+    )
+    parser.add_argument(
+        "--patience",
+        type=int,
+        default=100,
+        help="Early-stopping patience (epochs). Default: 100.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="Random seed for reproducibility. Default: 0.",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume the most recent run for this --project/--name instead of "
+             "starting fresh.",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+
+    try:
+        data_yaml = resolve_dataset(args.data)
+    except DatasetError as exc:
+        print(f"[train_yolo] ERROR: {exc}", file=sys.stderr)
+        return 1
+
+    print("[train_yolo] Starting YOLO11 training with:")
+    for key, value in {
+        "data": data_yaml,
+        "model": args.model,
+        "device": args.device,
+        "epochs": args.epochs,
+        "imgsz": args.imgsz,
+        "batch": args.batch,
+        "project": args.project,
+        "name": args.name,
+    }.items():
+        print(f"  {key:<8}: {value}")
+
+    # Ultralytics prefixes *relative* project paths with runs/<task>/ — resolve
+    # to an absolute path so the output lands exactly where the user asked.
+    project = str(Path(args.project).resolve())
+
+    model = YOLO(args.model)
+    model.train(
+        data=str(data_yaml),
+        epochs=args.epochs,
+        imgsz=args.imgsz,
+        batch=args.batch,
+        device=args.device,
+        project=project,
+        name=args.name,
+        workers=args.workers,
+        patience=args.patience,
+        seed=args.seed,
+        resume=args.resume,
+    )
+    save_dir = Path(model.trainer.save_dir)
+    print(f"[train_yolo] Done. Best weights: {save_dir / 'weights' / 'best.pt'}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
