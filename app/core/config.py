@@ -21,6 +21,9 @@ DB_USER = os.getenv("DB_USER", "root" if DB_TYPE == "mysql" else "postgres")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "")
 DB_NAME = os.getenv("DB_NAME", "bandungvision")
 
+# --- TOM API KEY ---
+TOM_API_KEY = os.getenv("TOM_API_KEY")
+
 _DRIVER_BY_TYPE = {
     "postgresql": ("postgresql+psycopg2", "5432"),
     "mysql": ("mysql+pymysql", "3306"),

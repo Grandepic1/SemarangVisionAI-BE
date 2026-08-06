@@ -4,6 +4,7 @@ from fastapi import FastAPI
 
 from app.core.config import APP_NAME
 from app.core.scheduler import shutdown_scheduler, start_scheduler
+from app.api.tomtom import router as tomtom_router
 from app.utils.response import ApiResponse, success
 
 
@@ -19,6 +20,8 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+app.include_router(tomtom_router)
 
 
 @app.get("/", response_model=ApiResponse)
