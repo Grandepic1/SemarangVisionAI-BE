@@ -1,7 +1,7 @@
 """TomTom Routing integration.
 
 Calculates the best routes between two coordinates and matches CCTV
-cameras (from cctvs.json) that lie on/near each route, so downstream
+cameras (from data/cctvs.json) that lie on/near each route, so downstream
 processing can act on the cameras covering a trip.
 """
 

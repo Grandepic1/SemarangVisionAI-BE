@@ -1,4 +1,4 @@
-"""Scrape the public CCTV list and keep cctvs.json up to date.
+"""Scrape the public CCTV list and keep data/cctvs.json up to date.
 
 Can be run standalone (`python -m app.services.scraping`) or called
 programmatically (e.g. by the daily APScheduler job in app.core.scheduler).
@@ -18,7 +18,8 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-DATA_FILE = Path(__file__).resolve().parent.parent.parent / "cctvs.json"
+# Runtime data lives under data/ (not the repo root).
+DATA_FILE = Path(__file__).resolve().parent.parent.parent / "data" / "cctvs.json"
 
 
 def fetch_raw_cctvs() -> list[dict]:
@@ -92,7 +93,8 @@ def diff_cctvs(old: list[dict], new: list[dict]) -> dict:
 
 
 def save_cctvs(results: list[dict], path: Path = DATA_FILE) -> None:
-    """Write the CCTV entries to the JSON file."""
+    """Write the CCTV entries to the JSON file (creating the parent dir)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(results, indent=2, ensure_ascii=False),
         encoding="utf-8",

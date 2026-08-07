@@ -1,0 +1,43 @@
+# Bandung Vision AI — run the API in Docker.
+#
+#   docker compose up --build -d
+#   open http://localhost:8000/docs
+#
+# The API needs no database at runtime: it reads data/cctvs.json (kept fresh
+# by the in-app daily scraper) and calls the TomTom + CCTV stream APIs directly.
+# SQLAlchemy/alembic are present for migrations only and are not exercised here.
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: bandungvision-be:latest
+    container_name: bandungvision-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env   # includes TOM_API_KEY, SCHEDULER_ENABLED, SCRAPE_TIMEZONE, ...
+    environment:
+      # Deterministic: overrides whatever .env says. The image bakes the model
+      # at exactly this path (see the Dockerfile COPY).
+      FLOOD_MODEL_PATH: flood_yolo11s_run/best.pt
+    volumes:
+      # data/cctvs.json is rewritten daily by the in-app scheduler (02:00 WIB).
+      # A named volume persists those updates across rebuilds and avoids
+      # bind-mount permission issues on Linux hosts. Inspect with:
+      #   docker compose exec api cat /app/data/cctvs.json
+      - cctvs_data:/app/data/cctvs.json
+      # Optional: override the baked-in model with your own weights.
+      # Create ./flood_yolo11s_run/best.pt first, then uncomment:
+      # - ./flood_yolo11s_run:/app/flood_yolo11s_run:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  cctvs_data:
