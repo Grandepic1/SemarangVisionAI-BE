@@ -11,8 +11,10 @@ from dataclasses import dataclass
 import requests
 
 from app.core.config import TOM_API_KEY
-from app.models.tomtom import DEFAULT_THRESHOLD_M
+from app.models.tomtom import DEFAULT_FLOOD_CONFIDENCE, DEFAULT_THRESHOLD_M
+from app.services.flood_detection import analyze_cameras, camera_key
 from app.services.scraping import load_existing
+from app.utils.exceptions import AppException
 
 ROUTING_URL = "https://api.tomtom.com/routing/1/calculateRoute/{origin}:{destination}/json"
 
@@ -20,8 +22,13 @@ ROUTING_URL = "https://api.tomtom.com/routing/1/calculateRoute/{origin}:{destina
 _METERS_PER_DEG = 111_320.0
 
 
-class TomTomError(Exception):
-    """Raised when the TomTom API request fails."""
+class TomTomError(AppException):
+    """Raised when the TomTom API request fails.
+
+    Carries an HTTP status code so the FastAPI AppException handler can turn
+    it into a proper error response: 401 for a missing API key, 502 when the
+    upstream TomTom Routing API cannot be reached or errors out.
+    """
 
 
 @dataclass
@@ -35,7 +42,7 @@ class Route:
 
 def _check_api_key() -> None:
     if not TOM_API_KEY:
-        raise TomTomError("TOM_API_KEY is not set. Add it to your .env file.")
+        raise TomTomError(401, "TOM_API_KEY is not set. Add it to your .env file.")
 
 
 def calculate_routes(
@@ -66,10 +73,11 @@ def calculate_routes(
             timeout=30,
         )
     except requests.RequestException as exc:
-        raise TomTomError(f"TomTom Routing API request failed: {exc}") from exc
+        raise TomTomError(502, f"TomTom Routing API request failed: {exc}") from exc
     if response.status_code != 200:
         raise TomTomError(
-            f"TomTom Routing API error {response.status_code}: {response.text[:300]}"
+            502,
+            f"TomTom Routing API error {response.status_code}: {response.text[:300]}",
         )
 
     routes = []
@@ -146,19 +154,89 @@ def cameras_on_route(
     return matched
 
 
+def _flood_risk(matched_cameras: list[dict]) -> float:
+    """Route-level flood risk in 0..1, used only for scoring (not exposed).
+
+    Combines how much of the route is flooded (coverage, 60%) with how
+    confident the detections were (severity, 40%).
+    """
+    checked = [c for c in matched_cameras if c.get("flood_checked")]
+    flooded = [c for c in checked if c.get("flood_detected")]
+    if not checked:
+        return 0.0
+    max_confidence = max((float(c.get("flood_confidence") or 0.0) for c in flooded), default=0.0)
+    coverage = len(flooded) / len(checked)
+    return round(0.6 * coverage + 0.4 * max_confidence, 4)
+
+
+def _score_routes(route_payloads: list[dict], flood_risks: list[float]) -> None:
+    """Score routes in place: flood-weighted rank, best route gets 100.
+
+    Combined cost = travel_time * (1 + 2 * flood_risk), so a route with a
+    flood on it is penalized as if it took roughly 3x longer; the cheapest
+    combined cost wins and is marked recommended.
+    """
+    if not route_payloads:
+        return
+
+    combined_costs = []
+    for payload, flood_risk in zip(route_payloads, flood_risks):
+        travel_time = float(payload["travel_time_in_seconds"] or 0.0)
+        combined_costs.append(travel_time * (1 + 2 * flood_risk))
+
+    best_cost = min(combined_costs)
+    best_index = combined_costs.index(best_cost)  # first route wins ties
+
+    for i, (payload, cost) in enumerate(zip(route_payloads, combined_costs)):
+        payload["score"] = round(100.0 * best_cost / cost, 1) if cost > 0 else 0.0
+        payload["recommended"] = i == best_index
+
+
+def _merge_flood_results(route_payloads: list[dict], analyzed: dict) -> None:
+    """Attach per-camera flood results back onto each route's camera list.
+
+    The analyzed dict is shared across routes, so the route-specific
+    distance_to_route_m annotation is restored from this route's own entry.
+    """
+    for payload in route_payloads:
+        merged = []
+        for cam in payload["cameras_on_route"]:
+            result = analyzed.get(camera_key(cam))
+            if result is None:
+                result = {
+                    **cam,
+                    "flood_checked": False,
+                    "flood_detected": False,
+                    "flood_confidence": 0.0,
+                    "flood_count": 0,
+                }
+            else:
+                result = {**result, "distance_to_route_m": cam.get("distance_to_route_m")}
+            merged.append(result)
+        payload["cameras_on_route"] = merged
+
+
 def get_route_cameras(
     origin: tuple[float, float],
     destination: tuple[float, float],
     threshold_m: float = DEFAULT_THRESHOLD_M,
     cameras: list[dict] | None = None,
+    flood_confidence: float = DEFAULT_FLOOD_CONFIDENCE,
 ) -> dict:
-    """Calculate the best routes and match CCTV cameras on each route.
+    """Calculate the best routes, match CCTV cameras, and score them by flood risk.
 
-    Returns a dict shaped for the API response:
+    One frame is grabbed from every active camera on each route and run through
+    the flood model; routes are then scored flood-weighted and the best one is
+    marked ``recommended``. The response exposes only the *location* of flooded
+    cameras (name + coordinates + confidence) — no ids, stream URLs, owners, or
+    statuses leak out.
+
+    Returns a dict shaped for the API response (see RouteData):
     {
       "origin": {"lat": ..., "lng": ...},
       "destination": {"lat": ..., "lng": ...},
       "threshold_m": 150.0,
+      "recommended_route_index": 0,
       "routes": [
         {
           "index": 0,
@@ -166,7 +244,9 @@ def get_route_cameras(
           "travel_time_in_seconds": ...,
           "traffic_delay_in_seconds": ...,
           "points": [[lat, lng], ...],
-          "cameras_on_route": [...],
+          "floods": [{"name", "latitude", "longitude", "flood_confidence"}, ...],
+          "score": 100.0,
+          "recommended": true,
         }, ...
       ],
     }
@@ -176,10 +256,10 @@ def get_route_cameras(
         cameras = load_existing()
 
     route_payloads = []
+    all_matched = []
     for route in routes:
         matched = cameras_on_route(cameras, route, threshold_m)
-
-        # TODO(process): cameras_on_route input untuk mengecek semua camera yang ada di rute
+        all_matched.extend(matched)
         route_payloads.append(
             {
                 "index": route.index,
@@ -191,9 +271,40 @@ def get_route_cameras(
             }
         )
 
+    # Analyze each unique active camera once, even if it appears on several routes.
+    active = [c for c in all_matched if c.get("status") == "ACTIVE"]
+    analyzed = analyze_cameras(active, flood_confidence)
+    _merge_flood_results(route_payloads, analyzed)
+
+    flood_risks = []
+    for payload in route_payloads:
+        flooded = [
+            c
+            for c in payload["cameras_on_route"]
+            if c.get("flood_detected") and c.get("flood_checked")
+        ]
+        payload["floods"] = [
+            {
+                "name": c.get("location_name") or c.get("camera_name") or "Unknown",
+                "latitude": c.get("latitude"),
+                "longitude": c.get("longitude"),
+                "flood_confidence": c.get("flood_confidence"),
+            }
+            for c in flooded
+        ]
+        flood_risks.append(_flood_risk(payload["cameras_on_route"]))
+        del payload["cameras_on_route"]
+
+    _score_routes(route_payloads, flood_risks)
+
+    recommended_index = next(
+        (p["index"] for p in route_payloads if p.get("recommended")),
+        None,
+    )
     return {
         "origin": {"lat": origin[0], "lng": origin[1]},
         "destination": {"lat": destination[0], "lng": destination[1]},
         "threshold_m": threshold_m,
+        "recommended_route_index": recommended_index,
         "routes": route_payloads,
     }

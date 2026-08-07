@@ -2,9 +2,12 @@
 
 from pydantic import BaseModel, Field
 
+# Fixed backend parameters — the frontend does not customize these.
 # Corridor width (meters) around a route that counts a camera as "on the route".
-# Shared contract between the API layer (Field default) and the service layer.
 DEFAULT_THRESHOLD_M = 150.0
+
+# Minimum confidence for a YOLO detection to count as a flood.
+DEFAULT_FLOOD_CONFIDENCE = 0.30
 
 
 class Coordinate(BaseModel):
@@ -13,7 +16,43 @@ class Coordinate(BaseModel):
 
 
 class RouteRequest(BaseModel):
+    """Request body for POST /api/routes.
+
+    threshold_m and flood_confidence are fixed server-side (150 m / 0.3);
+    extra fields sent by the client are ignored.
+    """
+
     origin: Coordinate
     destination: Coordinate
-    # Corridor width (meters) around each route that counts a camera as "on route".
-    threshold_m: float = Field(DEFAULT_THRESHOLD_M, ge=1, le=5000)
+
+
+class FloodLocation(BaseModel):
+    """A flood detected on the route: location name, coordinates, confidence."""
+
+    name: str
+    latitude: float
+    longitude: float
+    flood_confidence: float
+
+
+class RouteInfo(BaseModel):
+    """One calculated route with its flood-weighted score."""
+
+    index: int
+    length_in_meters: float
+    travel_time_in_seconds: float
+    traffic_delay_in_seconds: float
+    points: list[list[float]]  # [lat, lng] polyline
+    floods: list[FloodLocation]
+    score: float
+    recommended: bool
+
+
+class RouteData(BaseModel):
+    """Response body for POST /api/routes."""
+
+    origin: Coordinate
+    destination: Coordinate
+    threshold_m: float
+    recommended_route_index: int | None
+    routes: list[RouteInfo]

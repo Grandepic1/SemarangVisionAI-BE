@@ -45,7 +45,12 @@ DEFAULT_NAME = "cctv_train"
 # folder without a data.yaml.
 _SPLIT_LAYOUTS = {
     "train": [("train/images", "train/labels"), ("images/train", "labels/train")],
-    "val": [("val/images", "val/labels"), ("images/val", "labels/val")],
+    "val": [
+        ("val/images", "val/labels"),
+        ("valid/images", "valid/labels"),
+        ("images/val", "labels/val"),
+        ("images/valid", "labels/valid"),
+    ],
 }
 
 

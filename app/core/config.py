@@ -24,6 +24,17 @@ DB_NAME = os.getenv("DB_NAME", "bandungvision")
 # --- TOM API KEY ---
 TOM_API_KEY = os.getenv("TOM_API_KEY")
 
+# --- Flood detection ---
+# Path to the trained YOLO flood model. Relative paths resolve against the
+# project root (the trained weights live in flood_yolo11s_run/ by default).
+FLOOD_MODEL_PATH = os.getenv("FLOOD_MODEL_PATH", "flood_yolo11s_run/best.pt")
+# Inference image size passed to the model.
+FLOOD_IMGSZ = int(os.getenv("FLOOD_IMGSZ", "416"))
+# Per-camera frame-grab timeout in milliseconds (open + first read).
+FLOOD_GRAB_TIMEOUT_MS = int(os.getenv("FLOOD_GRAB_TIMEOUT_MS", "10000"))
+# How many camera streams are grabbed/detected concurrently.
+FLOOD_MAX_WORKERS = int(os.getenv("FLOOD_MAX_WORKERS", "8"))
+
 _DRIVER_BY_TYPE = {
     "postgresql": ("postgresql+psycopg2", "5432"),
     "mysql": ("mysql+pymysql", "3306"),
