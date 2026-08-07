@@ -33,7 +33,7 @@ services:
       # Create ./flood_yolo11s_run/best.pt first, then uncomment:
       # - ./flood_yolo11s_run:/app/flood_yolo11s_run:ro
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/"]
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/health"]
       interval: 30s
       timeout: 5s
       retries: 3

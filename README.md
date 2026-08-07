@@ -145,7 +145,8 @@ cameras takes tens of seconds. Relevant env vars: `FLOOD_MODEL_PATH`,
 docker compose up --build -d
 ```
 
-- API: http://localhost:8000 — Docs: http://localhost:8000/docs
+- All endpoints live under `/api` (e.g. `POST /api/routes`). Docs:
+  http://localhost:8000/docs — Health: `http://localhost:8000/api/health`
 - Env vars come from `.env` (see `.env.example`); `TOM_API_KEY` is required for
   routing. The in-app scheduler runs the daily CCTV scrape inside the container
   (set `SCHEDULER_ENABLED=false` in `.env` to disable it).

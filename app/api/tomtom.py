@@ -6,7 +6,9 @@ from app.models.tomtom import RouteData, RouteRequest
 from app.services.tomtom import get_route_cameras
 from app.utils.response import ApiResponse, ErrorResponse, success
 
-router = APIRouter(prefix="/api", tags=["Route"])
+# NOTE: the /api prefix is applied globally in app.main (api_router) —
+# routers must not hardcode it.
+router = APIRouter(tags=["Route"])
 
 
 @router.post(
