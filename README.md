@@ -1,6 +1,6 @@
-### Bandung Vision AI (Backend)
+### Semarang Vision AI (Backend)
 
-FastAPI backend for the Bandung Vision CCTV project.
+FastAPI backend for the Semarang Vision CCTV project.
 
 ---
 
@@ -146,7 +146,7 @@ docker compose up --build -d
 ```
 
 - All endpoints live under `/api` (e.g. `POST /api/routes`). Docs:
-  http://localhost:8000/docs — Health: `http://localhost:8000/api/health`
+  http://localhost:9002/docs — Health: `http://localhost:9002/api/health`
 - Env vars come from `.env` (see `.env.example`); `TOM_API_KEY` is required for
   routing. The in-app scheduler runs the daily CCTV scrape inside the container
   (set `SCHEDULER_ENABLED=false` in `.env` to disable it).
@@ -167,7 +167,7 @@ docker compose up --build -d
 On a fresh device:
 
 ```bash
-git clone <repo-url> && cd BandungVision-BE
+git clone <repo-url> && cd SemarangVision-BE
 cp .env.example .env        # then fill in TOM_API_KEY (and any DB settings)
 docker compose up --build -d
 ```

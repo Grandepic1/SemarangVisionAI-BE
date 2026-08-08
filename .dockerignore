@@ -14,8 +14,7 @@ venv/
 .ruff_cache/
 .mypy_cache/
 
-# Secrets & local files
-.env
+# Local files
 *.log
 
 # Training data / tooling not needed at runtime

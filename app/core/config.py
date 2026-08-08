@@ -5,7 +5,7 @@ from sqlalchemy.engine import URL
 
 load_dotenv()
 
-APP_NAME = os.getenv("APP_NAME", "Bandung Vision AI")
+APP_NAME = os.getenv("APP_NAME", "Semarang Vision AI")
 
 # --- Scheduler settings ---
 # Set to "false" to disable the in-app daily scrape job (e.g. during dev/testing).
@@ -19,7 +19,7 @@ DB_HOST = os.getenv("DB_HOST", "localhost")
 DB_PORT = os.getenv("DB_PORT", "")
 DB_USER = os.getenv("DB_USER", "root" if DB_TYPE == "mysql" else "postgres")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "")
-DB_NAME = os.getenv("DB_NAME", "bandungvision")
+DB_NAME = os.getenv("DB_NAME", "semarangvision")
 
 # --- TOM API KEY ---
 TOM_API_KEY = os.getenv("TOM_API_KEY")
