@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import APP_NAME
 from app.core.scheduler import shutdown_scheduler, start_scheduler
@@ -24,6 +25,16 @@ app = FastAPI(
     title=APP_NAME,
     version="0.1.0",
     lifespan=lifespan,
+)
+
+# CORS: allow all origins/methods/headers (public API consumed by web frontends).
+# allow_credentials stays False: with allow_origins=["*"] Starlette forbids
+# credentials, and this API doesn't use cookies/auth headers anyway.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Custom exceptions -> consistent {"success": false, ...} JSON error responses.
