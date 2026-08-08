@@ -33,6 +33,7 @@ class FloodLocation(BaseModel):
     latitude: float
     longitude: float
     flood_confidence: float
+    stream_url: str | None = None
 
 
 class RouteInfo(BaseModel):

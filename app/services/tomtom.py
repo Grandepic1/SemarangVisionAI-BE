@@ -244,7 +244,7 @@ def get_route_cameras(
           "travel_time_in_seconds": ...,
           "traffic_delay_in_seconds": ...,
           "points": [[lat, lng], ...],
-          "floods": [{"name", "latitude", "longitude", "flood_confidence"}, ...],
+          "floods": [{"name", "latitude", "longitude", "flood_confidence", "stream_url"}, ...],
           "score": 100.0,
           "recommended": true,
         }, ...
@@ -289,6 +289,7 @@ def get_route_cameras(
                 "latitude": c.get("latitude"),
                 "longitude": c.get("longitude"),
                 "flood_confidence": c.get("flood_confidence"),
+                "stream_url": c.get("stream_url"),
             }
             for c in flooded
         ]
