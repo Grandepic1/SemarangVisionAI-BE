@@ -26,8 +26,8 @@ TOM_API_KEY = os.getenv("TOM_API_KEY")
 
 # --- Flood detection ---
 # Path to the trained YOLO flood model. Relative paths resolve against the
-# project root (the trained weights live in flood_yolo11s_run/ by default).
-FLOOD_MODEL_PATH = os.getenv("FLOOD_MODEL_PATH", "flood_yolo11s_run/best.pt")
+# project root (the trained weights live in models/ by default).
+FLOOD_MODEL_PATH = os.getenv("FLOOD_MODEL_PATH", "models/best.pt")
 # Inference image size passed to the model.
 FLOOD_IMGSZ = int(os.getenv("FLOOD_IMGSZ", "416"))
 # Per-camera frame-grab timeout in milliseconds (open + first read).

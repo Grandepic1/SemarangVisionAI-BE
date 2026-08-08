@@ -24,16 +24,18 @@ services:
     environment:
       # Deterministic: overrides whatever .env says. The image bakes the model
       # at exactly this path (see the Dockerfile COPY).
-      FLOOD_MODEL_PATH: flood_yolo11s_run/best.pt
+      FLOOD_MODEL_PATH: models/best.pt
     volumes:
       # data/cctvs.json is rewritten daily by the in-app scheduler (02:00 WIB).
       # A named volume persists those updates across rebuilds and avoids
-      # bind-mount permission issues on Linux hosts. Inspect with:
+      # bind-mount permission issues on Linux hosts. Docker named volumes are
+      # directories, so they mount on /app/data (not the file itself); on first
+      # run the volume is seeded from the image's data/cctvs.json. Inspect with:
       #   docker compose exec api cat /app/data/cctvs.json
-      - cctvs_data:/app/data/cctvs.json
+      - cctvs_data:/app/data
       # Optional: override the baked-in model with your own weights.
-      # Create ./flood_yolo11s_run/best.pt first, then uncomment:
-      # - ./flood_yolo11s_run:/app/flood_yolo11s_run:ro
+      # Drop a new best.pt into ./models, then uncomment:
+      # - ./models:/app/models:ro
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9002/api/health"]
       interval: 30s

@@ -1,7 +1,6 @@
 # syntax=docker/dockerfile:1
 
-# Base image ships uv + Python 3.13 together — no separate python base image
-# plus a manually copied uv binary.
+# Ships uv + Python 3.13 together — one image for the whole toolchain.
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -33,7 +32,7 @@ COPY pyproject.toml uv.lock ./
 RUN uv export --frozen --no-dev --no-hashes -o requirements.txt
 
 # torch + torchvision from the CPU-only index first: PyPI's Linux wheels bundle
-# the CUDA runtime (~2 GB+), the PyTorch CPU index ships the same versions
+# the CUDA runtime (~2 GB+); the PyTorch CPU index ships the same versions
 # without it. Installing the exact pinned versions first means the full install
 # below sees them already satisfied and skips them. The lock also resolves CUDA
 # companion packages (cuda-*/nvidia-*/triton) for Linux — dropped here, they're
@@ -56,7 +55,7 @@ COPY alembic ./alembic
 COPY .env ./.env
 
 # Trained flood model -> exactly the path FLOOD_MODEL_PATH resolves to.
-COPY runs/detect/flood_yolo11s_run/best.pt ./flood_yolo11s_run/best.pt
+COPY models/best.pt ./models/best.pt
 
 # Non-root user. /app stays writable so the daily scraper can rewrite data/cctvs.json.
 RUN useradd --create-home --uid 10001 appuser \

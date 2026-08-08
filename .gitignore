@@ -6,25 +6,15 @@ dist/
 wheels/
 *.egg-info
 
-# Virtual environments
-.venv
+# Virtual environments + local env
+.venv/
 .env
 
-# YOLO training artifacts (ultralytics) + local datasets
-runs/
+# Training artifacts (ultralytics runs, local datasets, logs) — never committed
 datasets/
-# Downloaded ultralytics base weights (yolo11n.pt etc.)
-*.pt
-
-# Local logs
+runs/
 *.log
 
-# The trained flood model IS tracked (required by the Docker build on any
-# device) — un-ignore just that one file inside the otherwise-ignored runs/.
-!runs/
-runs/*
-!runs/detect
-runs/detect/*
-!runs/detect/flood_yolo11s_run
-runs/detect/flood_yolo11s_run/*
-!runs/detect/flood_yolo11s_run/best.pt
+# Model weights: every .pt is ignored except the committed production model
+*.pt
+!models/best.pt

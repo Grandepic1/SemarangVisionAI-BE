@@ -4,6 +4,20 @@ FastAPI backend for the Semarang Vision CCTV project.
 
 ---
 
+## Project structure
+
+```
+app/          FastAPI app (api/, core/, models/, services/, utils/)
+models/       Production weights — models/best.pt is committed (git-tracked)
+data/         Runtime data — cctvs.json (tracked, seeded into the Docker image)
+scripts/      CLI tools (e.g. train_yolo.py)
+datasets/     Training datasets (gitignored)
+runs/         Ultralytics training output (gitignored)
+notebooks/    Colab training notebook
+```
+
+---
+
 ## Model Training (YOLO11)
 
 Train a YOLO11 detector (`yolo11n` / `yolo11s`) on your CCTV dataset. Runs on
@@ -68,7 +82,7 @@ real-quality run, use the included Colab notebook — it mirrors
 2. **Runtime → Change runtime type → T4 GPU**
 3. Run all cells; upload your dataset zip (Roboflow export) when prompted
 4. Download `best.pt` and copy it into the project:
-   `runs/detect/flood_yolo11s_run/best.pt`
+   `models/best.pt`
 
 The notebook auto-detects your split layout, re-emits `data.yaml` with absolute
 paths (avoids Roboflow `../` relative-path quirks), reports final mAP metrics,
@@ -82,7 +96,7 @@ GPU training, CPU inference.
 `POST /api/routes` returns the 3 best routes between two points (TomTom
 Routing API), ranked **flood-weighted**: one frame is grabbed from every active
 CCTV camera near each route and run through the trained flood model
-(`FLOOD_MODEL_PATH`, default `flood_yolo11s_run/best.pt` — the completed Colab
+(`FLOOD_MODEL_PATH`, default `models/best.pt` — the completed Colab
 run, mAP50 0.81). Flood analysis always runs.
 
 ```json
@@ -151,15 +165,16 @@ docker compose up --build -d
   routing. The in-app scheduler runs the daily CCTV scrape inside the container
   (set `SCHEDULER_ENABLED=false` in `.env` to disable it).
 - **No database is needed at runtime** — SQLAlchemy/alembic are migration-only
-  here. `data/cctvs.json` (the scraper's output) lives in the `cctvs_data`
-  named volume so daily updates persist across rebuilds
+  here. The `cctvs_data` named volume mounts the container's `/app/data`
+  directory (Docker volumes are directories — they can't mount onto the single
+  file `cctvs.json`), so the scraper's daily updates persist across rebuilds.
+  On first run Docker seeds the volume from the image's `data/cctvs.json`
   (`docker compose exec api cat /app/data/cctvs.json` to inspect).
-- The trained model `runs/detect/flood_yolo11s_run/best.pt` is **committed to
-  the repo** (gitignored otherwise) and baked into the image at
-  `flood_yolo11s_run/best.pt` (the `FLOOD_MODEL_PATH` default), so the build
-  works on any machine that clones the repo. To use your own weights, replace
-  that file (or drop a `best.pt` into `./flood_yolo11s_run/` and uncomment the
-  model volume in `compose.yaml`).
+- The trained model `models/best.pt` is **committed to the repo** (every other
+  `*.pt` is gitignored) and baked into the image at `models/best.pt` (the
+  `FLOOD_MODEL_PATH` default), so the build works on any machine that clones
+  the repo. To use your own weights, drop a new `best.pt` into `./models/` and
+  uncomment the model volume in `docker-compose.yml`.
 - The image installs **CPU-only torch** (from the PyTorch CPU index) to keep it
   ~2 GB smaller than the default CUDA wheels; the pinned torch version must
   exist on `download.pytorch.org/whl/cpu` (it does for stable releases).
@@ -174,4 +189,6 @@ docker compose up --build -d
 
 `data/cctvs.json` is also tracked and seeded into the image (the scraper then
 keeps it fresh in the `cctvs_data` volume). Stop with `docker compose down`
-(add `-v` to also remove volumes).
+(add `-v` to also remove the volume — the next `up` re-seeds it from the
+image). If you ever see the `not a directory` mount error, remove the stale
+volume first: `docker compose down -v`.

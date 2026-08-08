@@ -17,16 +17,9 @@ venv/
 # Local files
 *.log
 
-# Training data / tooling not needed at runtime
+# Training-only tooling/artifacts — not needed at runtime
 datasets/
 notebooks/
 scripts/
+runs/
 yolo11s.pt
-
-# Training runs — keep ONLY the trained flood model the image bakes in
-runs/*
-!runs/detect
-runs/detect/*
-!runs/detect/flood_yolo11s_run
-runs/detect/flood_yolo11s_run/*
-!runs/detect/flood_yolo11s_run/best.pt
