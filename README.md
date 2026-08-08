@@ -111,7 +111,9 @@ and `flood_confidence` (0.3) are fixed server-side and cannot be customized.
 
 Response highlights — the response is typed by the `RouteData` model; camera
 ids, stream URLs, owners, statuses are **not** exposed, only the location of
-flooded cameras:
+flooded cameras. Each route also carries `guidance`: turn-by-turn maneuver
+instructions from TomTom in Indonesian (`message`, `maneuver` type, street
+name, and the maneuver `point` coordinates — everything a navigation UI needs):
 
 ```jsonc
 {
@@ -123,6 +125,21 @@ flooded cameras:
         "index": 0,
         "score": 100.0,                    // flood-weighted; best route = 100
         "recommended": true,
+        "guidance": [                       // turn-by-turn instructions (id-ID)
+          {
+            "type": "LOCATION_DEPARTURE", "maneuver": "DEPART",
+            "message": "Berangkat dari Jalan Mgr Sugiopranoto/14",
+            "street": "Jalan Mgr Sugiopranoto",
+            "point": {"lat": -6.98399, "lng": 110.40869},
+            "route_offset_in_meters": 0, "travel_time_in_seconds": 0
+          },
+          {
+            "type": "TURN", "maneuver": "TURN_LEFT",
+            "message": "Belok kiri ke Jalan Simpang Lima",
+            "street": "Jalan Simpang Lima",
+            "point": {"lat": -6.98975, "lng": 110.4224}
+          }
+        ],
         "floods": [                         // only floods: location name + where + confidence
           {"name": "KYAI SALEH", "latitude": -6.9867, "longitude": 110.4139, "flood_confidence": 0.87}
         ]

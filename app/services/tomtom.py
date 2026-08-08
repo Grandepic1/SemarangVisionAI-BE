@@ -6,7 +6,7 @@ processing can act on the cameras covering a trip.
 """
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import requests
 
@@ -17,6 +17,10 @@ from app.services.scraping import load_existing
 from app.utils.exceptions import AppException
 
 ROUTING_URL = "https://api.tomtom.com/routing/1/calculateRoute/{origin}:{destination}/json"
+
+# Turn-by-turn instruction language. id-ID = Indonesian (TomTom's official
+# localized instructions). Change to e.g. "en-US" for English.
+ROUTING_LANGUAGE = "id-ID"
 
 # One degree of latitude ≈ 111.32 km (equirectangular projection reference).
 _METERS_PER_DEG = 111_320.0
@@ -38,11 +42,49 @@ class Route:
     travel_time_in_seconds: float
     traffic_delay_in_seconds: float
     points: list[tuple[float, float]]  # (latitude, longitude) along the polyline
+    guidance: list[dict] = field(default_factory=list)  # maneuver instructions (see _parse_guidance)
 
 
 def _check_api_key() -> None:
     if not TOM_API_KEY:
         raise TomTomError(401, "TOM_API_KEY is not set. Add it to your .env file.")
+
+
+def _parse_guidance(raw_route: dict) -> list[dict]:
+    """Extract turn-by-turn maneuver instructions from a raw TomTom route.
+
+    Returns a list of dicts shaped like the GuidanceInstruction model
+    (snake_case fields, maneuver point as {lat, lng}), or [] if TomTom
+    returned no guidance for the route.
+    """
+    instructions = raw_route.get("guidance", {}).get("instructions", [])
+    parsed = []
+    for inst in instructions:
+        message = inst.get("message")
+        if not message:
+            # The response model requires instruction text; skip any entry
+            # TomTom returned without a message instead of risking a 500.
+            continue
+        point = inst.get("point")
+        parsed.append(
+            {
+                "type": inst.get("instructionType") or "",
+                "maneuver": inst.get("maneuver") or "",
+                "message": message,
+                "street": inst.get("street"),
+                "road_numbers": inst.get("roadNumbers"),
+                "point": (
+                    {"lat": point["latitude"], "lng": point["longitude"]}
+                    if point
+                    else None
+                ),
+                "route_offset_in_meters": inst.get("routeOffsetInMeters", 0),
+                "travel_time_in_seconds": inst.get("travelTimeInSeconds", 0),
+                "roundabout_exit_number": inst.get("roundaboutExitNumber"),
+                "turn_angle_in_decimal_degrees": inst.get("turnAngleInDecimalDegrees"),
+            }
+        )
+    return parsed
 
 
 def calculate_routes(
@@ -54,6 +96,8 @@ def calculate_routes(
 
     With max_alternatives=2 TomTom returns 3 routes total: the fastest
     route plus two alternatives. Returns [] if no routes are found.
+    Each Route carries turn-by-turn guidance instructions in Indonesian
+    (see ROUTING_LANGUAGE).
     """
     _check_api_key()
 
@@ -69,6 +113,8 @@ def calculate_routes(
                 "routeType": "fastest",
                 "travelMode": "car",
                 "computeTravelTimeFor": "all",
+                "instructionsType": "text",
+                "language": ROUTING_LANGUAGE,
             },
             timeout=30,
         )
@@ -94,6 +140,7 @@ def calculate_routes(
                 travel_time_in_seconds=summary.get("travelTimeInSeconds", 0),
                 traffic_delay_in_seconds=summary.get("trafficDelayInSeconds", 0),
                 points=points,
+                guidance=_parse_guidance(raw),
             )
         )
     return routes
@@ -244,6 +291,7 @@ def get_route_cameras(
           "travel_time_in_seconds": ...,
           "traffic_delay_in_seconds": ...,
           "points": [[lat, lng], ...],
+          "guidance": [{"type", "maneuver", "message", "street", ...}, ...],
           "floods": [{"name", "latitude", "longitude", "flood_confidence", "stream_url"}, ...],
           "score": 100.0,
           "recommended": true,
@@ -267,6 +315,7 @@ def get_route_cameras(
                 "travel_time_in_seconds": route.travel_time_in_seconds,
                 "traffic_delay_in_seconds": route.traffic_delay_in_seconds,
                 "points": [[lat, lng] for lat, lng in route.points],
+                "guidance": route.guidance,
                 "cameras_on_route": matched,
             }
         )
