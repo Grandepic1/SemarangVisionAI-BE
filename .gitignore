@@ -12,7 +12,9 @@ wheels/
 
 # Training artifacts (ultralytics runs, local datasets, logs) — never committed
 datasets/
+exports/
 runs/
+logs/
 *.log
 
 # Model weights: every .pt is ignored except the committed production model

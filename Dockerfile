@@ -54,8 +54,8 @@ COPY alembic.ini ./
 COPY alembic ./alembic
 COPY .env ./.env
 
-# Trained flood model -> exactly the path FLOOD_MODEL_PATH resolves to.
-COPY models/best.pt ./models/best.pt
+# Trained anomaly model -> exactly the path ANOMALY_MODEL_PATH resolves to.
+FREECOPY models/best.pt ./models/best.pt
 
 # Non-root user. /app stays writable so the daily scraper can rewrite data/cctvs.json.
 RUN useradd --create-home --uid 10001 appuser \

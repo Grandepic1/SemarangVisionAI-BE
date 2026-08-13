@@ -17,6 +17,21 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "requests>=2.34.2",
     "sqlalchemy>=2.0.51",
+    "torch>=2.13.0",
+    "torchvision>=0.26.0",
     "ultralytics>=8.4.115",
     "uvicorn>=0.52.1",
 ]
+
+# Use CUDA-enabled torch builds from the PyTorch index (instead of the
+# CPU-only wheels from PyPI). Change the url to cu12x/cu13x to match your
+# driver's CUDA version, or remove [tool.uv.sources] to revert to CPU torch.
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu126" }
+torchvision = { index = "pytorch-cu126" }
+

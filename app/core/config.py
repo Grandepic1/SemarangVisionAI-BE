@@ -24,16 +24,20 @@ DB_NAME = os.getenv("DB_NAME", "semarangvision")
 # --- TOM API KEY ---
 TOM_API_KEY = os.getenv("TOM_API_KEY")
 
-# --- Flood detection ---
-# Path to the trained YOLO flood model. Relative paths resolve against the
-# project root (the trained weights live in models/ by default).
-FLOOD_MODEL_PATH = os.getenv("FLOOD_MODEL_PATH", "models/best.pt")
+# --- Anomaly detection (kemacetan, pohon_tumbang, konstruksi, kecelakaan) ---
+# Path to the trained YOLO anomaly model. Relative paths resolve against the
+# project root (the trained weights live in models/ by default). The legacy
+# FLOOD_MODEL_PATH name is still honored as a fallback during the transition.
+ANOMALY_MODEL_PATH = os.getenv("ANOMALY_MODEL_PATH") or os.getenv("FLOOD_MODEL_PATH", "models/best.pt")
 # Inference image size passed to the model.
-FLOOD_IMGSZ = int(os.getenv("FLOOD_IMGSZ", "416"))
+ANOMALY_IMGSZ = int(os.getenv("ANOMALY_IMGSZ", "640"))
+# Device for anomaly inference: "auto" uses the first CUDA GPU when available
+# (falls back to CPU), or force a specific device like "0" or "cpu".
+ANOMALY_DEVICE = os.getenv("ANOMALY_DEVICE", "auto")
 # Per-camera frame-grab timeout in milliseconds (open + first read).
-FLOOD_GRAB_TIMEOUT_MS = int(os.getenv("FLOOD_GRAB_TIMEOUT_MS", "10000"))
+ANOMALY_GRAB_TIMEOUT_MS = int(os.getenv("ANOMALY_GRAB_TIMEOUT_MS", "10000"))
 # How many camera streams are grabbed/detected concurrently.
-FLOOD_MAX_WORKERS = int(os.getenv("FLOOD_MAX_WORKERS", "8"))
+ANOMALY_MAX_WORKERS = int(os.getenv("ANOMALY_MAX_WORKERS", "8"))
 
 _DRIVER_BY_TYPE = {
     "postgresql": ("postgresql+psycopg2", "5432"),

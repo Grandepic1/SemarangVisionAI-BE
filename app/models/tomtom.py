@@ -6,8 +6,8 @@ from pydantic import BaseModel, Field
 # Corridor width (meters) around a route that counts a camera as "on the route".
 DEFAULT_THRESHOLD_M = 150.0
 
-# Minimum confidence for a YOLO detection to count as a flood.
-DEFAULT_FLOOD_CONFIDENCE = 0.30
+# Per-class anomaly confidence thresholds live in app.services.anomaly_detection
+# (ANOMALY_CLASSES) — rare, serious classes need higher evidence than common ones.
 
 
 class Coordinate(BaseModel):
@@ -18,21 +18,30 @@ class Coordinate(BaseModel):
 class RouteRequest(BaseModel):
     """Request body for POST /api/routes.
 
-    threshold_m and flood_confidence are fixed server-side (150 m / 0.3);
-    extra fields sent by the client are ignored.
+    threshold_m and the per-class anomaly confidences are fixed server-side
+    (150 m corridor, thresholds in ANOMALY_CLASSES); extra fields sent by the
+    client are ignored.
     """
 
     origin: Coordinate
     destination: Coordinate
 
 
-class FloodLocation(BaseModel):
-    """A flood detected on the route: location name, coordinates, confidence."""
+class AnomalyEvent(BaseModel):
+    """One anomaly detected on the route: location, type, and confidence.
+
+    A single camera can contribute several events (one per detected class).
+    anomaly_type is the machine key (kemacetan / pohon_tumbang / konstruksi /
+    kecelakaan); label is the human-readable Indonesian name.
+    """
 
     name: str
     latitude: float
     longitude: float
-    flood_confidence: float
+    anomaly_type: str
+    label: str
+    confidence: float
+    count: int = 1
     stream_url: str | None = None
 
 
@@ -57,7 +66,7 @@ class GuidanceInstruction(BaseModel):
 
 
 class RouteInfo(BaseModel):
-    """One calculated route with its flood-weighted score."""
+    """One calculated route with its anomaly-weighted score."""
 
     index: int
     length_in_meters: float
@@ -65,7 +74,7 @@ class RouteInfo(BaseModel):
     traffic_delay_in_seconds: float
     points: list[list[float]]  # [lat, lng] polyline
     guidance: list[GuidanceInstruction]
-    floods: list[FloodLocation]
+    anomalies: list[AnomalyEvent]
     score: float
     recommended: bool
 

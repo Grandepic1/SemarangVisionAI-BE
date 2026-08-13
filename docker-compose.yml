@@ -24,7 +24,7 @@ services:
     environment:
       # Deterministic: overrides whatever .env says. The image bakes the model
       # at exactly this path (see the Dockerfile COPY).
-      FLOOD_MODEL_PATH: models/best.pt
+      ANOMALY_MODEL_PATH: models/best.pt
     volumes:
       # data/cctvs.json is rewritten daily by the in-app scheduler (02:00 WIB).
       # A named volume persists those updates across rebuilds and avoids

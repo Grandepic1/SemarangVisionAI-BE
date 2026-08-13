@@ -11,8 +11,8 @@ from dataclasses import dataclass, field
 import requests
 
 from app.core.config import TOM_API_KEY
-from app.models.tomtom import DEFAULT_FLOOD_CONFIDENCE, DEFAULT_THRESHOLD_M
-from app.services.flood_detection import analyze_cameras, camera_key
+from app.models.tomtom import DEFAULT_THRESHOLD_M
+from app.services.anomaly_detection import analyze_cameras, camera_key
 from app.services.scraping import load_existing
 from app.utils.exceptions import AppException
 
@@ -24,6 +24,16 @@ ROUTING_LANGUAGE = "id-ID"
 
 # One degree of latitude ≈ 111.32 km (equirectangular projection reference).
 _METERS_PER_DEG = 111_320.0
+
+# Per-class severity used for route risk scoring (0..1). Road-blocking
+# anomalies (kecelakaan, pohon_tumbang) weigh more than slowdowns
+# (kemacetan); konstruksi partially blocks the road.
+_ANOMALY_SEVERITY = {
+    "kecelakaan": 1.0,
+    "pohon_tumbang": 1.0,
+    "konstruksi": 0.6,
+    "kemacetan": 0.4,
+}
 
 
 class TomTomError(AppException):
@@ -201,35 +211,43 @@ def cameras_on_route(
     return matched
 
 
-def _flood_risk(matched_cameras: list[dict]) -> float:
-    """Route-level flood risk in 0..1, used only for scoring (not exposed).
+def _anomaly_risk(matched_cameras: list[dict]) -> float:
+    """Route-level anomaly risk in 0..1, used only for scoring (not exposed).
 
-    Combines how much of the route is flooded (coverage, 60%) with how
-    confident the detections were (severity, 40%).
+    Combines how much of the route has an anomaly (coverage, 60%) with the
+    most severe detection — severity * confidence, so an accident outranks a
+    congestion (40%).
     """
-    checked = [c for c in matched_cameras if c.get("flood_checked")]
-    flooded = [c for c in checked if c.get("flood_detected")]
+    checked = [c for c in matched_cameras if c.get("anomaly_checked")]
     if not checked:
         return 0.0
-    max_confidence = max((float(c.get("flood_confidence") or 0.0) for c in flooded), default=0.0)
-    coverage = len(flooded) / len(checked)
-    return round(0.6 * coverage + 0.4 * max_confidence, 4)
+    anomalous = [c for c in checked if c.get("has_anomaly")]
+    if anomalous:
+        worst = max(
+            _ANOMALY_SEVERITY.get(a["type"], 0.5) * float(a["confidence"])
+            for c in anomalous
+            for a in c.get("anomalies", [])
+        )
+    else:
+        worst = 0.0
+    coverage = len(anomalous) / len(checked)
+    return round(0.6 * coverage + 0.4 * worst, 4)
 
 
-def _score_routes(route_payloads: list[dict], flood_risks: list[float]) -> None:
-    """Score routes in place: flood-weighted rank, best route gets 100.
+def _score_routes(route_payloads: list[dict], anomaly_risks: list[float]) -> None:
+    """Score routes in place: anomaly-weighted rank, best route gets 100.
 
-    Combined cost = travel_time * (1 + 2 * flood_risk), so a route with a
-    flood on it is penalized as if it took roughly 3x longer; the cheapest
-    combined cost wins and is marked recommended.
+    Combined cost = travel_time * (1 + 2 * anomaly_risk), so a route with a
+    road-blocking anomaly on it is penalized as if it took roughly 3x longer;
+    the cheapest combined cost wins and is marked recommended.
     """
     if not route_payloads:
         return
 
     combined_costs = []
-    for payload, flood_risk in zip(route_payloads, flood_risks):
+    for payload, anomaly_risk in zip(route_payloads, anomaly_risks):
         travel_time = float(payload["travel_time_in_seconds"] or 0.0)
-        combined_costs.append(travel_time * (1 + 2 * flood_risk))
+        combined_costs.append(travel_time * (1 + 2 * anomaly_risk))
 
     best_cost = min(combined_costs)
     best_index = combined_costs.index(best_cost)  # first route wins ties
@@ -239,8 +257,8 @@ def _score_routes(route_payloads: list[dict], flood_risks: list[float]) -> None:
         payload["recommended"] = i == best_index
 
 
-def _merge_flood_results(route_payloads: list[dict], analyzed: dict) -> None:
-    """Attach per-camera flood results back onto each route's camera list.
+def _merge_anomaly_results(route_payloads: list[dict], analyzed: dict) -> None:
+    """Attach per-camera anomaly results back onto each route's camera list.
 
     The analyzed dict is shared across routes, so the route-specific
     distance_to_route_m annotation is restored from this route's own entry.
@@ -252,10 +270,10 @@ def _merge_flood_results(route_payloads: list[dict], analyzed: dict) -> None:
             if result is None:
                 result = {
                     **cam,
-                    "flood_checked": False,
-                    "flood_detected": False,
-                    "flood_confidence": 0.0,
-                    "flood_count": 0,
+                    "anomaly_checked": False,
+                    "anomalies": [],
+                    "has_anomaly": False,
+                    "max_confidence": 0.0,
                 }
             else:
                 result = {**result, "distance_to_route_m": cam.get("distance_to_route_m")}
@@ -268,14 +286,14 @@ def get_route_cameras(
     destination: tuple[float, float],
     threshold_m: float = DEFAULT_THRESHOLD_M,
     cameras: list[dict] | None = None,
-    flood_confidence: float = DEFAULT_FLOOD_CONFIDENCE,
 ) -> dict:
-    """Calculate the best routes, match CCTV cameras, and score them by flood risk.
+    """Calculate the best routes, match CCTV cameras, and score them by anomaly risk.
 
     One frame is grabbed from every active camera on each route and run through
-    the flood model; routes are then scored flood-weighted and the best one is
-    marked ``recommended``. The response exposes only the *location* of flooded
-    cameras (name + coordinates + confidence) — no ids, stream URLs, owners, or
+    the anomaly model; routes are then scored anomaly-weighted and the best one
+    is marked ``recommended``. The response exposes only the *location* of
+    anomalous cameras (name + coordinates + anomaly type + confidence) plus the
+    camera's stream URL (for the frontend's live view) — no ids, owners, or
     statuses leak out.
 
     Returns a dict shaped for the API response (see RouteData):
@@ -292,7 +310,10 @@ def get_route_cameras(
           "traffic_delay_in_seconds": ...,
           "points": [[lat, lng], ...],
           "guidance": [{"type", "maneuver", "message", "street", ...}, ...],
-          "floods": [{"name", "latitude", "longitude", "flood_confidence", "stream_url"}, ...],
+          "anomalies": [
+            {"name", "latitude", "longitude", "anomaly_type", "label", "confidence", "count", "stream_url"},
+            ...,
+          ],
           "score": 100.0,
           "recommended": true,
         }, ...
@@ -322,30 +343,34 @@ def get_route_cameras(
 
     # Analyze each unique active camera once, even if it appears on several routes.
     active = [c for c in all_matched if c.get("status") == "ACTIVE"]
-    analyzed = analyze_cameras(active, flood_confidence)
-    _merge_flood_results(route_payloads, analyzed)
+    analyzed = analyze_cameras(active)
+    _merge_anomaly_results(route_payloads, analyzed)
 
-    flood_risks = []
+    anomaly_risks = []
     for payload in route_payloads:
-        flooded = [
+        anomalous = [
             c
             for c in payload["cameras_on_route"]
-            if c.get("flood_detected") and c.get("flood_checked")
+            if c.get("has_anomaly") and c.get("anomaly_checked")
         ]
-        payload["floods"] = [
+        payload["anomalies"] = [
             {
                 "name": c.get("location_name") or c.get("camera_name") or "Unknown",
                 "latitude": c.get("latitude"),
                 "longitude": c.get("longitude"),
-                "flood_confidence": c.get("flood_confidence"),
+                "anomaly_type": a["type"],
+                "label": a["label"],
+                "confidence": a["confidence"],
+                "count": a["count"],
                 "stream_url": c.get("stream_url"),
             }
-            for c in flooded
+            for c in anomalous
+            for a in c.get("anomalies", [])
         ]
-        flood_risks.append(_flood_risk(payload["cameras_on_route"]))
+        anomaly_risks.append(_anomaly_risk(payload["cameras_on_route"]))
         del payload["cameras_on_route"]
 
-    _score_routes(route_payloads, flood_risks)
+    _score_routes(route_payloads, anomaly_risks)
 
     recommended_index = next(
         (p["index"] for p in route_payloads if p.get("recommended")),

@@ -35,14 +35,16 @@ router = APIRouter(tags=["Route"])
     },
 )
 async def find_route_cameras(request: RouteRequest):
-    """Calculate the 3 best routes between two points, ranked by flood risk.
+    """Calculate the 3 best routes between two points, ranked by anomaly risk.
 
+    Cameras along each route are analyzed for traffic anomalies (kemacetan,
+    pohon_tumbang, konstruksi, kecelakaan) and routes are scored accordingly.
     Errors (missing API key, TomTom upstream failures) raise AppException
     subclasses, which the app-level exception handler turns into
     {"success": false, ...} responses with proper HTTP status codes.
     """
-    # threshold_m (150 m) and flood_confidence (0.3) are fixed server-side
-    # defaults in the service — the frontend only provides coordinates.
+    # threshold_m (150 m) and the per-class anomaly confidences are fixed
+    # server-side — the frontend only provides coordinates.
     data = await asyncio.to_thread(
         get_route_cameras,
         (request.origin.lat, request.origin.lng),
