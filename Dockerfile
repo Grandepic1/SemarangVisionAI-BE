@@ -34,16 +34,20 @@ RUN uv export --frozen --no-dev --no-hashes -o requirements.txt
 # torch + torchvision from the CPU-only index first: PyPI's Linux wheels bundle
 # the CUDA runtime (~2 GB+); the PyTorch CPU index ships the same versions
 # without it. Installing the exact pinned versions first means the full install
-# below sees them already satisfied and skips them. The lock also resolves CUDA
-# companion packages (cuda-*/nvidia-*/triton) for Linux — dropped here, they're
-# only needed by GPU torch (nvidia-ml-py, a pure-python ultralytics dep, kept).
-RUN TORCH_VERSION="$(grep -iE '^torch==' requirements.txt | head -1)" \
-    && TORCHVISION_VERSION="$(grep -iE '^torchvision==' requirements.txt | head -1)" \
+# below sees them already satisfied and skips them. The lock resolves the CUDA
+# builds (torch==2.13.0+cu126) for GPU dev machines, so the local version tag
+# is stripped here — the CPU index carries the same versions as +cpu builds.
+# The lock also resolves CUDA companion packages (cuda-*/nvidia-*/triton) for
+# Linux — dropped here, they're only needed by GPU torch (nvidia-ml-py, a
+# pure-python ultralytics dep, kept).
+RUN TORCH_VERSION="$(grep -iE '^torch==' requirements.txt | head -1 | sed -E 's/\+(cu|cpu)[0-9]+//')" \
+    && TORCHVISION_VERSION="$(grep -iE '^torchvision==' requirements.txt | head -1 | sed -E 's/\+(cu|cpu)[0-9]+//')" \
     && test -n "$TORCH_VERSION" && test -n "$TORCHVISION_VERSION" \
     && uv pip install --index-url https://download.pytorch.org/whl/cpu \
            --extra-index-url https://pypi.org/simple \
            "$TORCH_VERSION" "$TORCHVISION_VERSION" \
-    && awk '!/^(cuda-|triton|nvidia-)/ || /^nvidia-ml-py/' requirements.txt > /tmp/requirements-linux.txt \
+    && awk '!/^(cuda-|triton|nvidia-)/ || /^nvidia-ml-py/' requirements.txt \
+       | sed -E 's/(^torch(vision)?==[0-9.]+)\+(cu|cpu)[0-9]+/\1/' > /tmp/requirements-linux.txt \
     && uv pip install -r /tmp/requirements-linux.txt \
     && rm -f requirements.txt /tmp/requirements-linux.txt
 

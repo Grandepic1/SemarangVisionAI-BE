@@ -19,6 +19,8 @@ venv/
 
 # Training-only tooling/artifacts — not needed at runtime
 datasets/
+exports/
+logs/
 notebooks/
 scripts/
 runs/
