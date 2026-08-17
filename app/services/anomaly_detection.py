@@ -8,15 +8,21 @@ Detects four anomaly classes on the Semarang traffic cameras:
     kecelakaan     — traffic accident
 
 Pipeline per camera:
-    1. grab one frame from the HLS stream (OpenCV/FFmpeg backend, bounded timeout)
-    2. run the trained anomaly model on the frame
-    3. report every detected anomaly class with its confidence and box count
+    1. grab several frames from the HLS stream a few seconds apart (OpenCV/FFmpeg
+       backend, bounded timeout)
+    2. run the trained anomaly model on each frame
+    3. report a class only when it persists across enough frames AND passes the
+       per-class rules: kecelakaan must show motion (an event, not parked cars),
+       konstruksi is dropped when traffic flows freely through the cones unless
+       congestion is also detected
 
 The model is loaded lazily once and reused across requests (thread-safe).
 """
 
+import math
 import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -24,10 +30,15 @@ import cv2
 
 from app.core.config import (
     ANOMALY_DEVICE,
+    ANOMALY_EVENT_MOTION,
+    ANOMALY_FLOW_MOTION,
     ANOMALY_GRAB_TIMEOUT_MS,
     ANOMALY_IMGSZ,
     ANOMALY_MAX_WORKERS,
+    ANOMALY_MIN_FRACTION,
     ANOMALY_MODEL_PATH,
+    ANOMALY_SAMPLE_FRAMES,
+    ANOMALY_SAMPLE_INTERVAL_S,
 )
 
 # Project root (this file lives in app/services/).
@@ -146,15 +157,11 @@ def grab_frame(stream_url: str) -> "cv2.typing.MatLike | None":
             cap.release()
 
 
-def detect_anomalies(frame) -> dict:
-    """Run the anomaly model on a frame.
-
-    Returns {"classes": [{"type", "label", "confidence", "count"}, ...]} with
-    one entry per detected anomaly class (sorted by confidence, highest first).
-    Detections below a class's own threshold are dropped, so every reported
-    class is already a confirmed anomaly.
-    """
-    min_conf = min((cfg["confidence"] for cfg in ANOMALY_CLASSES.values()), default=0.25)
+def _run_inference(frame):
+    """Run the model once on a frame; return (boxes, names)."""
+    min_conf = min(
+        (cfg["confidence"] for cfg in ANOMALY_CLASSES.values()), default=0.25
+    )
     with _infer_lock:
         results = get_model().predict(
             frame,
@@ -163,21 +170,38 @@ def detect_anomalies(frame) -> dict:
             device=_resolve_device(),
             verbose=False,
         )
-    boxes = results[0].boxes
-    if boxes is None or len(boxes) == 0:
-        return {"classes": []}
+    return results[0].boxes, results[0].names or {}
 
-    # Map detections to anomaly classes BY the model's class name (lowercased)
-    # so the model's class order doesn't matter — only its names.
-    model_names = results[0].names or {}
+
+def _classify_boxes(boxes, model_names: dict) -> tuple[dict, dict]:
+    """Map raw model boxes to per-class detections with thresholds applied.
+
+    Returns (detected, box_map):
+      detected = {type: [confidences]} — one entry per class above its threshold
+      box_map   = {type: [[x1, y1, x2, y2], ...]} — pixel box regions, used for
+                  the motion check between samples
+    Classes are matched BY NAME (lowercased), so the model's class order does
+    not matter — only its names.
+    """
     detected: dict[str, list[float]] = {}
-    for cls_id, conf in zip(boxes.cls.int().tolist(), boxes.conf.tolist()):
+    box_map: dict[str, list[list[float]]] = {}
+    if boxes is None or len(boxes) == 0:
+        return detected, box_map
+
+    for i, (cls_id, conf) in enumerate(
+        zip(boxes.cls.int().tolist(), boxes.conf.tolist())
+    ):
         cfg = _NAME_LOOKUP.get(str(model_names.get(int(cls_id), "")).lower())
         if cfg is None or conf < cfg["confidence"]:
             continue
         detected.setdefault(cfg["type"], []).append(float(conf))
+        box_map.setdefault(cfg["type"], []).append([float(v) for v in boxes.xyxy[i]])
+    return detected, box_map
 
-    classes = [
+
+def _classes_from_detected(detected: dict[str, list[float]]) -> list[dict]:
+    """Convert {type: [confidences]} into the response shape (sorted by conf)."""
+    return [
         {
             "type": anomaly_type,
             "label": _ANOMALY_BY_TYPE[anomaly_type]["label"],
@@ -188,15 +212,144 @@ def detect_anomalies(frame) -> dict:
             detected.items(), key=lambda kv: max(kv[1]), reverse=True
         )
     ]
-    return {"classes": classes}
+
+
+def detect_anomalies(frame) -> dict:
+    """Run the anomaly model on a single frame.
+
+    Returns {"classes": [{"type", "label", "confidence", "count"}, ...]} with
+    one entry per detected anomaly class (sorted by confidence, highest first).
+    Detections below a class's own threshold are dropped, so every reported
+    class is already a confirmed anomaly.
+    """
+    boxes, names = _run_inference(frame)
+    detected, _ = _classify_boxes(boxes, names)
+    return {"classes": _classes_from_detected(detected)}
+
+
+def _sample_frames(
+    stream_url: str,
+    n: int = ANOMALY_SAMPLE_FRAMES,
+    interval_s: float = ANOMALY_SAMPLE_INTERVAL_S,
+) -> list:
+    """Grab up to n frames, interval_s apart; returns the frames that succeeded.
+
+    A dead or slow stream yields fewer frames (never blocks the caller beyond
+    the grab timeout per attempt).
+    """
+    frames = []
+    for i in range(n):
+        frame = grab_frame(stream_url)
+        if frame is not None:
+            frames.append(frame)
+        if i < n - 1:
+            time.sleep(interval_s)
+    return frames
+
+
+def _region_motion(frame_a, frame_b, boxes: list[list[float]]) -> float:
+    """Fraction of changed pixels inside the union of box regions (0..1).
+
+    Pixels whose grayscale value moved by more than 15 (of 255) between the
+    two frames count as "changed". Static scenes (parked cars, closed roads)
+    score ~0; flowing traffic or people moving score much higher.
+    """
+    if not boxes:
+        return 0.0
+    gray_a = cv2.cvtColor(frame_a, cv2.COLOR_BGR2GRAY)
+    gray_b = cv2.cvtColor(frame_b, cv2.COLOR_BGR2GRAY)
+    diff = cv2.absdiff(gray_a, gray_b)
+    _, thresh = cv2.threshold(diff, 15, 255, cv2.THRESH_BINARY)
+
+    h, w = gray_a.shape
+    x1 = max(0, int(min(b[0] for b in boxes)))
+    y1 = max(0, int(min(b[1] for b in boxes)))
+    x2 = min(w, int(max(b[2] for b in boxes)))
+    y2 = min(h, int(max(b[3] for b in boxes)))
+    if x2 <= x1 or y2 <= y1:
+        return 0.0
+    region = thresh[y1:y2, x1:x2]
+    return float(cv2.countNonZero(region)) / (region.shape[0] * region.shape[1])
+
+
+def _confirm_classes(
+    samples: list[dict],
+    frames: list,
+) -> list[dict]:
+    """Apply persistence + motion rules to multi-frame detections.
+
+    ``samples`` is one dict per grabbed frame: {"detected": {type: [conf]},
+    "boxes": {type: [[x1, y1, x2, y2], ...]}}. Rules:
+
+      * persistence:  a class must appear in >= ANOMALY_MIN_FRACTION of frames
+      * kecelakaan:   box region must show motion >= ANOMALY_EVENT_MOTION
+                      (an event) — suppresses parked cars read as accidents
+      * konstruksi:   suppressed when traffic flows freely through the boxes
+                      (motion >= ANOMALY_FLOW_MOTION) unless congestion is
+                      also present — a work zone either jams traffic or closes
+                      the road; cones with cars flowing past are lane guidance
+
+    Falls back to per-frame reporting when fewer than 2 frames were grabbed
+    (no temporal evidence available).
+    """
+    n = len(samples)
+    if n == 0:
+        return []
+
+    detected_all: dict[str, list[list[float]]] = {}
+    for sample in samples:
+        for t, confs in sample["detected"].items():
+            detected_all.setdefault(t, []).append(confs)
+
+    min_frames = max(1, math.ceil(ANOMALY_MIN_FRACTION * n))
+    can_check_motion = len(frames) >= 2
+
+    confirmed = []
+    for t, conf_lists in detected_all.items():
+        if len(conf_lists) < min_frames:
+            continue
+
+        if can_check_motion:
+            # Average box-region motion over consecutive frame pairs.
+            motions = []
+            for i in range(len(frames) - 1):
+                boxes = (
+                    samples[i]["boxes"].get(t, [])
+                    + samples[i + 1]["boxes"].get(t, [])
+                )
+                if boxes:
+                    motions.append(_region_motion(frames[i], frames[i + 1], boxes))
+            avg_motion = sum(motions) / len(motions) if motions else 0.0
+
+            if t == "kecelakaan" and avg_motion < ANOMALY_EVENT_MOTION:
+                continue  # static scene -> parked cars / stopped, not an accident
+            if t == "konstruksi":
+                congestion = any("kemacetan" in s["detected"] for s in samples)
+                if not congestion and avg_motion >= ANOMALY_FLOW_MOTION:
+                    continue  # traffic flowing past cones -> lane guidance only
+
+        all_conf = [c for confs in conf_lists for c in confs]
+        confirmed.append(
+            {
+                "type": t,
+                "label": _ANOMALY_BY_TYPE[t]["label"],
+                "confidence": round(max(all_conf), 4),
+                "count": max(len(confs) for confs in conf_lists),
+            }
+        )
+
+    confirmed.sort(key=lambda c: c["confidence"], reverse=True)
+    return confirmed
 
 
 def analyze_camera(camera: dict) -> dict:
-    """Grab one frame from the camera and detect anomalies.
+    """Sample the camera a few times and report anomalies that hold up.
 
-    Never raises: failures are reported inline so one broken stream does not
-    sink the whole batch. The camera's own coordinates (latitude/longitude)
-    stay on the returned dict, so callers know *where* an anomaly was seen.
+    Each camera is grabbed ANOMALY_SAMPLE_FRAMES times (ANOMALY_SAMPLE_INTERVAL_S
+    apart); detections must persist across ANOMALY_MIN_FRACTION of the frames and
+    pass the per-class motion rules (see _confirm_classes). Never raises:
+    failures are reported inline so one broken stream does not sink the whole
+    batch. The camera's own coordinates stay on the returned dict.
     """
     result = {
         **camera,
@@ -206,14 +359,23 @@ def analyze_camera(camera: dict) -> dict:
         "max_confidence": 0.0,
     }
     try:
-        frame = grab_frame(camera.get("stream_url", ""))
-        if frame is None:
+        frames = _sample_frames(camera.get("stream_url", ""))
+        if not frames:
             result["anomaly_error"] = "frame grab failed"
             return result
-        classes = detect_anomalies(frame)["classes"]
+
+        samples = []
+        for frame in frames:
+            boxes, names = _run_inference(frame)
+            detected, box_map = _classify_boxes(boxes, names)
+            samples.append({"detected": detected, "boxes": box_map})
+
+        classes = _confirm_classes(samples, frames)
         result["anomalies"] = classes
         result["has_anomaly"] = bool(classes)
-        result["max_confidence"] = max((c["confidence"] for c in classes), default=0.0)
+        result["max_confidence"] = max(
+            (c["confidence"] for c in classes), default=0.0
+        )
         return result
     except Exception as exc:  # noqa: BLE001 - report and continue
         result["anomaly_error"] = str(exc)[:200]

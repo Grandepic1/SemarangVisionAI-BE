@@ -39,6 +39,24 @@ ANOMALY_GRAB_TIMEOUT_MS = int(os.getenv("ANOMALY_GRAB_TIMEOUT_MS", "10000"))
 # How many camera streams are grabbed/detected concurrently.
 ANOMALY_MAX_WORKERS = int(os.getenv("ANOMALY_MAX_WORKERS", "8"))
 
+# --- Multi-frame anomaly confirmation (B+C+D rules) ---
+# Each camera is sampled ANOMALY_SAMPLE_FRAMES times, ANOMALY_SAMPLE_INTERVAL_S
+# seconds apart, and an anomaly is reported only when the evidence holds up:
+#  - persistence: the class must appear in >= ANOMALY_MIN_FRACTION of samples
+#  - kecelakaan:  the box region must show motion (an event), suppressing the
+#    classic "parked cars read as accident" false positive
+#  - konstruksi:  suppressed when traffic flows freely through the boxes unless
+#    congestion is also detected (a work zone either jams traffic or closes the
+#    road; cones with cars flowing past are just lane guidance)
+ANOMALY_SAMPLE_FRAMES = int(os.getenv("ANOMALY_SAMPLE_FRAMES", "3"))
+ANOMALY_SAMPLE_INTERVAL_S = float(os.getenv("ANOMALY_SAMPLE_INTERVAL_S", "5"))
+ANOMALY_MIN_FRACTION = float(os.getenv("ANOMALY_MIN_FRACTION", "0.6"))
+# Fraction of changed pixels (absdiff > 15) inside a class's box region that
+# counts as "motion". kecelakaan needs >= EVENT_MOTION; konstruksi is
+# suppressed when motion >= FLOW_MOTION (and no congestion is present).
+ANOMALY_EVENT_MOTION = float(os.getenv("ANOMALY_EVENT_MOTION", "0.02"))
+ANOMALY_FLOW_MOTION = float(os.getenv("ANOMALY_FLOW_MOTION", "0.05"))
+
 _DRIVER_BY_TYPE = {
     "postgresql": ("postgresql+psycopg2", "5432"),
     "mysql": ("mysql+pymysql", "3306"),
