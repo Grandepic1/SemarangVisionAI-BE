@@ -127,12 +127,12 @@ GPU training, CPU inference.
 ## Anomaly-aware route ranking
 
 `POST /api/routes` returns the 3 best routes between two points (TomTom
-Routing API), ranked **anomaly-weighted**: one frame is grabbed from every
-active CCTV camera near each route and run through the trained anomaly model
+Routing API), ranked **anomaly-weighted**: active CCTV cameras near each route
+are sampled and evaluated through the trained anomaly model
 (`ANOMALY_MODEL_PATH`, default `models/best.pt`). The four detected classes
 and their server-side confidence thresholds live in
 `app/services/anomaly_detection.py` (`ANOMALY_CLASSES`): kemacetan 0.35,
-pohon_tumbang 0.40, konstruksi 0.40, kecelakaan 0.45. Anomaly analysis always
+pohon_tumbang 0.40, konstruksi 0.50, kecelakaan 0.60. Anomaly analysis always
 runs.
 
 ```json
@@ -200,10 +200,18 @@ name, and the maneuver `point` coordinates — everything a navigation UI needs)
 
 How scoring works:
 
-- Each camera's frame runs through the model; detections above the class's own
-  threshold count as anomalies. A camera can report several classes at once.
-  Each detected anomaly appears in `anomalies` with its type, Indonesian
-  label, confidence, box count, and exact coordinates.
+- Each active camera on a route is sampled several frames apart
+  (`ANOMALY_SAMPLE_FRAMES`, default 3 frames, 5s interval). Detections above
+  each class's threshold (kemacetan 0.35, pohon_tumbang 0.40, konstruksi 0.50,
+  kecelakaan 0.60) undergo multi-frame verification:
+  - **Persistence**: a class must persist in >= `ANOMALY_MIN_FRACTION` (60%) of
+    sampled frames.
+  - **Motion validation**: `kecelakaan` requires bounding-box pixel motion
+    (`ANOMALY_EVENT_MOTION`) to filter out parked cars misidentified as accidents;
+    `konstruksi` is suppressed when traffic flows freely past cones
+    (`ANOMALY_FLOW_MOTION`) unless congestion is also detected.
+  Confirmed detections appear in `anomalies` with type, Indonesian label,
+  confidence, box count, and coordinates.
 - Internally, each route gets an `anomaly_risk` (0–1) combining anomalous
   camera coverage (60%) with the most severe detection — severity × confidence
   (40%). Per-class severity: kecelakaan 1.0 (roadblock), pohon_tumbang 1.0
@@ -218,7 +226,9 @@ How scoring works:
 
 Live analysis is network-bound (~2–5 s per camera), so a request checking 10–30
 cameras takes tens of seconds. Relevant env vars: `ANOMALY_MODEL_PATH`,
-`ANOMALY_IMGSZ`, `ANOMALY_GRAB_TIMEOUT_MS`, `ANOMALY_MAX_WORKERS`
+`ANOMALY_IMGSZ`, `ANOMALY_GRAB_TIMEOUT_MS`, `ANOMALY_MAX_WORKERS`,
+`ANOMALY_SAMPLE_FRAMES`, `ANOMALY_SAMPLE_INTERVAL_S`, `ANOMALY_MIN_FRACTION`,
+`ANOMALY_EVENT_MOTION`, `ANOMALY_FLOW_MOTION`
 (`FLOOD_MODEL_PATH` is still honored as a fallback for the model path).
 
 ---
